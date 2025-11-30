@@ -30,8 +30,148 @@
 #include "config.h"
 #include "esp_ota_ops.h"
 
+#include "tusb.h"
+#include "usb_defs.h"
+#include "hal/usb_phy_types.h"
+#include "esp_mac.h"
+#include "esp_private/usb_phy.h"
+
 
 #define HID_TAG "HID_BRIDGE"
+
+#define MS_OS_20_DESC_LEN  0xB2
+#define VENDOR_REQUEST_MICROSOFT 0x20  // Can be any value between 0x20 and 0xFF
+
+#define TUSB_DESC_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_MSC_DESC_LEN)
+
+static const tusb_desc_device_t descriptor_config = {
+    .bLength = sizeof(descriptor_config),
+    .bDescriptorType = TUSB_DESC_DEVICE,
+    .bcdUSB = 0x0210, // at least 2.1 or 3.x for BOS
+    .bDeviceClass = TUSB_CLASS_MISC,
+    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol = MISC_PROTOCOL_IAD,
+#ifdef CFG_TUD_ENDPOINT0_SIZE
+    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
+#else  // earlier versions have a typo in the name
+    .bMaxPacketSize0 = CFG_TUD_ENDOINT0_SIZE,
+#endif
+    .idVendor = CONFIG_BRIDGE_USB_VID,
+    .idProduct = CONFIG_BRIDGE_USB_PID,
+    .bcdDevice = BCDDEVICE,     // defined in CMakeLists.txt
+    .iManufacturer = 0x01,
+    .iProduct = 0x02,
+    .iSerialNumber = 0x03,
+    .bNumConfigurations = 0x01
+};
+
+static uint8_t const desc_configuration[] = {
+    // config number, interface count, string index, total length, attribute, power in mA
+    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, TUSB_DESC_TOTAL_LEN, 0, 100),
+
+    // Interface number, string index, EP notification address and size, EP data address (out, in) and size.
+    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 4, 0x81, 8, EPNUM_CDC, 0x80 | EPNUM_CDC, CFG_TUD_CDC_EP_BUFSIZE),
+};
+
+#define MAC_BYTES       6
+
+static char serial_descriptor[MAC_BYTES * 2 + 1] = {'\0'}; // 2 chars per hexnumber + '\0'
+
+static char const *string_desc_arr[] = {
+    (const char[]) { 0x09, 0x04 }, // 0: is supported language is English (0x0409)
+    CONFIG_BRIDGE_MANUFACTURER,    // 1: Manufacturer
+#if CONFIG_DEBUG_PROBE_IFACE_JTAG
+    CONFIG_BRIDGE_PRODUCT_NAME,    // 2: Product
+#else
+    "CMSIS-DAP",                   // OpenOCD expects "CMSIS-DAP" as a product name
+#endif
+    serial_descriptor,             // 3: Serials
+    "CDC",
+};
+
+#define BOS_TOTAL_LEN      (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
+
+// BOS Descriptor with Microsoft OS 2.0 support
+static uint8_t const desc_bos[] = {
+    // total length, number of device caps
+    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+
+    // Microsoft OS 2.0 descriptor
+    TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT)
+};
+
+uint8_t const *tud_descriptor_bos_cb(void)
+{
+    return desc_bos;
+}
+
+uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
+{
+    return desc_configuration;
+}
+
+uint8_t const *tud_descriptor_device_cb(void)
+{
+    return (uint8_t const *) &descriptor_config;
+}
+
+
+void tud_mount_cb(void)
+{
+    ESP_LOGI(HID_TAG, "Mounted");
+}
+
+static void init_serial_no(void)
+{
+    uint8_t m[MAC_BYTES] = {0};
+    esp_err_t ret = esp_efuse_mac_get_default(m);
+
+    if (ret != ESP_OK) {
+        ESP_LOGD(HID_TAG, "Cannot read MAC address and set the device serial number");
+    }
+
+    snprintf(serial_descriptor, sizeof(serial_descriptor),
+             "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+}
+
+static void init_usb_phy(void)
+{
+    usb_phy_config_t phy_config = {
+        .controller = USB_PHY_CTRL_OTG,
+        .target = USB_PHY_TARGET_INT,
+        .otg_mode = USB_OTG_MODE_DEVICE,
+        .otg_speed = USB_PHY_SPEED_FULL,
+        .ext_io_conf = NULL,
+        .otg_io_conf = NULL,
+    };
+    usb_phy_handle_t phy_handle;
+    usb_new_phy(&phy_config, &phy_handle);
+}
+
+
+uint16_t const *tud_descriptor_string_cb(const uint8_t index, const uint16_t langid)
+{
+    static uint16_t _desc_str[32];  // Static, because it must exist long enough for transfer to complete
+    uint8_t chr_count;
+
+    if (index == 0) {
+        memcpy(&_desc_str[1], string_desc_arr[0], 2);
+        chr_count = 1;
+    }
+    // first byte is length (including header), second byte is string type
+    _desc_str[0] = (TUSB_DESC_STRING << 8) | (2 * chr_count + 2);
+
+    return _desc_str;
+}
+
+
+static void tusb_device_task(void *pvParameters)
+{
+    while (1) {
+        tud_task();
+    }
+    vTaskDelete(NULL);
+}
 
 
 
@@ -1308,12 +1448,18 @@ void uart_console_task(void *pvParameters)
 void app_main(void)
 {
     esp_err_t ret;
-    
+
+    init_serial_no();
+    init_usb_phy();
+
+    tusb_init();
+    xTaskCreate(tusb_device_task, "tusb_device_task", 4 * 1024, NULL, 5, NULL);
+
     //set external UART number according to setup
     //and setup anything pin related.
-    ext_uart_num = CONFIG_MODULE_UART_NR;
-    ext_uart_rx = CONFIG_MODULE_RX_PIN;
-    ext_uart_tx = CONFIG_MODULE_TX_PIN;
+    //ext_uart_num = CONFIG_MODULE_UART_NR;
+    //ext_uart_rx = CONFIG_MODULE_RX_PIN;
+    //ext_uart_tx = CONFIG_MODULE_TX_PIN;
 
     // Initialize FreeRTOS elements
     eventgroup_system = xEventGroupCreate();

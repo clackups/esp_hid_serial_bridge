@@ -1,50 +1,28 @@
-menu "esp32_mouse_keyboard / FLipMouse & FABI config"
-	config USE_AS_FLIPMOUSE_FABI
-		bool "Use project as FLipMouse/FABI Bluetooth module"
-		default n
-		help
-			If this option is enabled, a FLipMouse/FABI Bluetooth module
-			is built. If disabled, this project acts as demo code for Bluetooth
-			HID code.
-      
-  menu "Select device"
-    visible if USE_AS_FLIPMOUSE_FABI
-    choice MODULE_TYPE
-        prompt "Module type"
+menu "HID_SERIAL_BRIDGE Config"      
+    config BRIDGE_USB_VID
+        hex "USB vendor ID"
+        default 0x303A
         help
-            Specify the module type (Arduino Nano RP2040 Connect or esp32miniBT module).
-            
-        config MODULE_MINIBT
-            bool "esp32miniBT module"
+            USB Vendor ID for the bridge device
 
-        config MODULE_NANO
-            bool "Arduino Nano Connect RP2040 with uBlox Nina"
-        endchoice
-  endmenu
-  
-	menu "Pinning for UART RX/TX & LED (if not a defined module)"
-		visible if !USE_AS_FLIPMOUSE_FABI
-		
-		config MODULE_RX_PIN
-			int "RX pin for command/HID UART"
-			default 17
-			range 1 39
-			
-		config MODULE_TX_PIN
-			int "TX pin for command/HID UART"
-			default 16
-			range 1 39
-			
-		config MODULE_LED_PIN
-			int "LED connection indicator pin"
-			default 5
-			range 1 39
-		
-		config MODULE_UART_NR
-			int "UART interface number"
-			default 2
-			range 1 2
-	endmenu
+    config BRIDGE_USB_PID
+        hex "USB product ID"
+        default 0x1002
+        help
+            USB Product ID for the bridge device
+
+    config BRIDGE_MANUFACTURER
+        string "USB bridge manufacturer"
+        default "clackups"
+        help
+            Manufacturer string shown in USB device descriptor
+
+    config BRIDGE_PRODUCT_NAME
+        string "USB product name"
+        default "HID Serial Bridge"
+        help
+            Product name string shown in USB device descriptor
+
 	config MODULE_USEKEYBOARD
 		bool "Enable BLE-HID keyboard (UNUSED, mouse is always enabled)"
 		default y
