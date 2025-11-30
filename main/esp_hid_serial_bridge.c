@@ -27,320 +27,80 @@
 #include "esp_bt_device.h"
 #include "hid_dev.h"
 #include "config.h"
-#include "esp_ota_ops.h"
 
-#include "tusb.h"
-#include "usb_defs.h"
-#include "hal/usb_phy_types.h"
-#include "esp_mac.h"
-#include "esp_private/usb_phy.h"
-#include "freertos/ringbuf.h"
-#include "freertos/semphr.h"
-
+#include "tinyusb.h"
+#include "tinyusb_default_config.h"
+#include "tinyusb_cdc_acm.h"
+#include "tinyusb_console.h"
+#include "sdkconfig.h"
 
 #define HID_TAG "HID"
 #define USB_TAG "USB"
 
-#define SERIAL_HANDLER_TASK_PRI 5
+#define CDC_FLUSH_TICKS pdMS_TO_TICKS(10)
 
-#define MS_OS_20_DESC_LEN  0xB2
-#define VENDOR_REQUEST_MICROSOFT 0x20  // Can be any value between 0x20 and 0xFF
-
-#define TUSB_DESC_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_CDC_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_MSC_DESC_LEN)
-
-static const tusb_desc_device_t descriptor_config = {
-    .bLength = sizeof(descriptor_config),
-    .bDescriptorType = TUSB_DESC_DEVICE,
-    .bcdUSB = 0x0210, // at least 2.1 or 3.x for BOS
-    .bDeviceClass = TUSB_CLASS_MISC,
-    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
-    .bDeviceProtocol = MISC_PROTOCOL_IAD,
-#ifdef CFG_TUD_ENDPOINT0_SIZE
-    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
-#else  // earlier versions have a typo in the name
-    .bMaxPacketSize0 = CFG_TUD_ENDOINT0_SIZE,
-#endif
-    .idVendor = CONFIG_BRIDGE_USB_VID,
-    .idProduct = CONFIG_BRIDGE_USB_PID,
-    .bcdDevice = BCDDEVICE,     // defined in CMakeLists.txt
-    .iManufacturer = 0x01,
-    .iProduct = 0x02,
-    .iSerialNumber = 0x03,
-    .bNumConfigurations = 0x01
-};
-
-static uint8_t const desc_configuration[] = {
-    // config number, interface count, string index, total length, attribute, power in mA
-    TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, TUSB_DESC_TOTAL_LEN, 0, 100),
-
-    // Interface number, string index, EP notification address and size, EP data address (out, in) and size.
-    TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, 4, 0x81, 8, EPNUM_CDC, 0x80 | EPNUM_CDC, CFG_TUD_CDC_EP_BUFSIZE),
-};
-
-#define MAC_BYTES       6
-
-static char serial_descriptor[MAC_BYTES * 2 + 1] = {'\0'}; // 2 chars per hexnumber + '\0'
-
-static char const *string_desc_arr[] = {
-    (const char[]) { 0x09, 0x04 }, // 0: is supported language is English (0x0409)
-    CONFIG_BRIDGE_MANUFACTURER,    // 1: Manufacturer
-    CONFIG_BRIDGE_PRODUCT_NAME,    // 2: Product
-    serial_descriptor,             // 3: Serials
-    "CDC",
-};
-
-#define BOS_TOTAL_LEN      (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
-
-// BOS Descriptor with Microsoft OS 2.0 support
-static uint8_t const desc_bos[] = {
-    // total length, number of device caps
-    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
-
-    // Microsoft OS 2.0 descriptor
-    TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, VENDOR_REQUEST_MICROSOFT)
-};
-
-uint8_t const *tud_descriptor_bos_cb(void)
+void device_event_handler(tinyusb_event_t *event, void *arg)
 {
-    return desc_bos;
-}
-
-uint8_t const *tud_descriptor_configuration_cb(uint8_t index)
-{
-    return desc_configuration;
-}
-
-uint8_t const *tud_descriptor_device_cb(void)
-{
-    return (uint8_t const *) &descriptor_config;
-}
-
-
-void tud_mount_cb(void)
-{
-    ESP_LOGI(USB_TAG, "Mounted");
-}
-
-static void init_serial_no(void)
-{
-    uint8_t m[MAC_BYTES] = {0};
-    esp_err_t ret = esp_efuse_mac_get_default(m);
-
-    if (ret != ESP_OK) {
-        ESP_LOGD(USB_TAG, "Cannot read MAC address and set the device serial number");
+    switch (event->id) {
+    case TINYUSB_EVENT_ATTACHED:
+        // Device has been attached to the USB Host and configured
+        break;
+    case TINYUSB_EVENT_DETACHED:
+        // Device has been detached from the USB Host
+        break;
+    default:
+        break;
     }
-
-    snprintf(serial_descriptor, sizeof(serial_descriptor),
-             "%02X%02X%02X%02X%02X%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
 }
 
-static void init_usb_phy(void)
+
+static void init_usb_cdc(void)
 {
-    usb_phy_config_t phy_config = {
-        .controller = USB_PHY_CTRL_OTG,
-        .target = USB_PHY_TARGET_INT,
-        .otg_mode = USB_OTG_MODE_DEVICE,
-        .otg_speed = USB_PHY_SPEED_FULL,
-        .ext_io_conf = NULL,
-        .otg_io_conf = NULL,
+    ESP_LOGI(USB_TAG, "USB initialization");
+
+    const tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG(device_event_handler);
+    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+
+    const tinyusb_config_cdcacm_t acm_cfg = {
+        .cdc_port = TINYUSB_CDC_ACM_0,
+        .callback_rx = NULL,
+        .callback_rx_wanted_char = NULL,
+        .callback_line_state_changed = NULL,
+        .callback_line_coding_changed = NULL
     };
-    usb_phy_handle_t phy_handle;
-    usb_new_phy(&phy_config, &phy_handle);
+
+    ESP_ERROR_CHECK(tinyusb_cdcacm_init(&acm_cfg));
+    // ESP_ERROR_CHECK(tinyusb_console_init(TINYUSB_CDC_ACM_0));
+    ESP_LOGI(USB_TAG, "USB CDC initialized");
 }
 
 
-uint16_t const *tud_descriptor_string_cb(const uint8_t index, const uint16_t langid)
+static void cdc_write_string(const char* data)
 {
-    static uint16_t _desc_str[32];  // Static, because it must exist long enough for transfer to complete
-    uint8_t chr_count;
-
-    if (index == 0) {
-        memcpy(&_desc_str[1], string_desc_arr[0], 2);
-        chr_count = 1;
-    }
-    // first byte is length (including header), second byte is string type
-    _desc_str[0] = (TUSB_DESC_STRING << 8) | (2 * chr_count + 2);
-
-    return _desc_str;
+    tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0, (const uint8_t*) data, strlen(data));
 }
 
-
-static void tusb_device_task(void *pvParameters)
+static void cdc_write_newline()
 {
-    while (1) {
-        tud_task();
-    }
-    vTaskDelete(NULL);
+    const char *nl = "\r\n";
+    cdc_write_string(nl);
+    tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, CDC_FLUSH_TICKS);
 }
-
-
-#define USB_SEND_RINGBUFFER_SIZE (2 * 1024)
-#define USB_RECV_RINGBUFFER_SIZE (2 * 1024)
-
-static RingbufHandle_t usb_sendbuf;
-static RingbufHandle_t usb_recvbuf;
-static SemaphoreHandle_t usb_tx_requested = NULL;
-static SemaphoreHandle_t usb_tx_done = NULL;
-
-
-esp_err_t cdc_write(const char *data, size_t len)
-{
-    ESP_LOGD(USB_TAG, "To USB ringbuffer (%zu bytes)", len);
-    ESP_LOG_BUFFER_HEXDUMP("Data: ", data, len, ESP_LOG_DEBUG);
-
-    // Send the data to USB CDC
-    if (xRingbufferSend(usb_sendbuf, data, len, pdMS_TO_TICKS(10)) != pdTRUE) {
-        ESP_LOGV(USB_TAG, "Cannot write to ringbuffer (free %zu of %zu)!",
-                 xRingbufferGetCurFreeSize(usb_sendbuf),
-                 (size_t)USB_SEND_RINGBUFFER_SIZE);
-        vTaskDelay(pdMS_TO_TICKS(10));
-        return ESP_ERR_TIMEOUT;
-    }
-    return ESP_OK;
-}
-
-int cdc_read(void *databuf, uint32_t length, TickType_t ticks_to_wait)
-{
-    size_t ringbuf_received = 0;
-    uint8_t *buf = xRingbufferReceiveUpTo(usb_recvbuf, &ringbuf_received, ticks_to_wait, length);
-    if (buf) {
-        memcpy(databuf, buf, ringbuf_received);
-        vRingbufferReturnItem(usb_recvbuf, (void *) buf);
-    }
-    return ringbuf_received;
-}
-
-
-
-static esp_err_t usb_wait_for_tx(const uint32_t block_time_ms)
-{
-    if (xSemaphoreTake(usb_tx_done, pdMS_TO_TICKS(block_time_ms)) != pdTRUE) {
-        return ESP_ERR_TIMEOUT;
-    }
-    return ESP_OK;
-}
-
-
-static void usb_sender_task(void *pvParameters)
-{
-    while (1) {
-        size_t ringbuf_received;
-        uint8_t *buf = xRingbufferReceiveUpTo(usb_sendbuf, &ringbuf_received, pdMS_TO_TICKS(100),
-                                              CFG_TUD_CDC_TX_BUFSIZE);
-
-        if (buf) {
-            uint8_t int_buf[CFG_TUD_CDC_TX_BUFSIZE];
-            memcpy(int_buf, buf, ringbuf_received);
-            vRingbufferReturnItem(usb_sendbuf, (void *) buf);
-
-            for (int transferred = 0, to_send = ringbuf_received; transferred < ringbuf_received;) {
-                xSemaphoreGive(usb_tx_requested);
-                const int wr_len = tud_cdc_write(int_buf + transferred, to_send);
-                /* tinyusb might have been flushed the data. In case not flushed, we are flushing here.
-                    2nd attempt might return zero, meaning there is no data to transfer. So it is safe to call it again.
-                */
-                tud_cdc_write_flush();
-                if (usb_wait_for_tx(50) != ESP_OK) {
-                    xSemaphoreTake(usb_tx_requested, 0);
-                    tud_cdc_write_clear(); /* host might be disconnected. drop the buffer */
-                    ESP_LOGV(USB_TAG, "usb tx timeout");
-                    break;
-                }
-                ESP_LOGD(USB_TAG, "USB ringbuffer -> USB CDC (%d bytes)", wr_len);
-                transferred += wr_len;
-                to_send -= wr_len;
-            }
-        } else {
-            ESP_LOGD(USB_TAG, "usb_sender_task: nothing to send");
-            vTaskDelay(pdMS_TO_TICKS(100));
-            continue;
-        }
-    }
-    vTaskDelete(NULL);
-}
-
-
-void tud_cdc_tx_complete_cb(const uint8_t itf)
-{
-    if (xSemaphoreTake(usb_tx_requested, 0) != pdTRUE) {
-        /* Semaphore should have been given before write attempt.
-            Sometimes tinyusb can send one more cb even xfer_complete len is zero
-        */
-        return;
-    }
-
-    xSemaphoreGive(usb_tx_done);
-}
-
-
-void tud_cdc_rx_cb(const uint8_t itf)
-{
-    uint8_t buf[CFG_TUD_CDC_RX_BUFSIZE];
-
-    const uint32_t rx_size = tud_cdc_n_read(itf, buf, CFG_TUD_CDC_RX_BUFSIZE);
-    if (rx_size > 0) {
-        ESP_LOGD(USB_TAG, "USB CDC -> (%" PRIu32 " bytes)", rx_size);
-        ESP_LOG_BUFFER_HEXDUMP("Data: ", buf, rx_size, ESP_LOG_DEBUG);
-
-        // save to usb_recvbuf
-        if (xRingbufferSend(usb_recvbuf, buf, rx_size, pdMS_TO_TICKS(10)) != pdTRUE) {
-            ESP_LOGV(USB_TAG, "Cannot write to ringbuffer (free %zu of %zu)!",
-                     xRingbufferGetCurFreeSize(usb_recvbuf),
-                     (size_t)USB_SEND_RINGBUFFER_SIZE);
-            vTaskDelay(pdMS_TO_TICKS(10));
-        }
-    } else {
-        ESP_LOGW(USB_TAG, "tud_cdc_rx_cb receive error");
-    }
-}
-
-
-static esp_err_t init_usb_rxtx(void)
-{
-    // Create ring buffer for USB sending
-    usb_sendbuf = xRingbufferCreate(USB_SEND_RINGBUFFER_SIZE, RINGBUF_TYPE_BYTEBUF);
-    if (!usb_sendbuf) {
-        ESP_LOGE(USB_TAG, "Cannot create ringbuffer for USB sender");
-        return ESP_ERR_NO_MEM;
-    }
-
-    // Create ring buffer for USB receiving
-    usb_recvbuf = xRingbufferCreate(USB_RECV_RINGBUFFER_SIZE, RINGBUF_TYPE_BYTEBUF);
-    if (!usb_recvbuf) {
-        ESP_LOGE(USB_TAG, "Cannot create ringbuffer for USB receiver");
-        return ESP_ERR_NO_MEM;
-    }
-
-    // Create semaphores for USB TX synchronization
-    usb_tx_done = xSemaphoreCreateBinary();
-    usb_tx_requested = xSemaphoreCreateBinary();
-    if (!usb_tx_done || !usb_tx_requested) {
-        ESP_LOGE(USB_TAG, "Cannot create USB TX semaphores");
-        return ESP_ERR_NO_MEM;
-    }
-
-    // Start USB sender task
-    xTaskCreate(usb_sender_task, "usb_sender_task", 4 * 1024, NULL, SERIAL_HANDLER_TASK_PRI, NULL);
-
-    ESP_LOGI(USB_TAG, "USB rx/tx initialized");
-    return ESP_OK;
-}
-
 
 
 /** @brief NVS handle to resolve BT addr to name
- * 
+ *
  * In NVS, we store the BT addr as key and the name as value. */
 nvs_handle nvs_bt_name_h;
 
 /** @brief NVS handle to store key/value pairs via UART
- * 
+ *
  * In NVS, we store arbitrary values, which are sent via UART.
  * This can(will) be used for storing different values from the
  * GUI on the ESP32. */
 nvs_handle nvs_storage_h;
 
-/** Timestamp of last sent HID packet, used for idle sending timer callback 
+/** Timestamp of last sent HID packet, used for idle sending timer callback
  * @see periodicHIDCallback */
 uint64_t timestampLastSent;
 
@@ -573,7 +333,7 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
         break;
     case ESP_HIDD_EVENT_BLE_CONNECT: {
         ESP_LOGI(HID_TAG, "ESP_HIDD_EVENT_BLE_CONNECT");
-        
+
         for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS;i++)
         {
             if(active_hid_conn_ids[i] == -1) //search for the first unused slot
@@ -584,7 +344,7 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
                 break;
             }
         }
-		
+
         //because some devices do connect with a quite high connection
         //interval, we might have a congested channel...
         //to overcome this issue, we update the connection parameters here
@@ -596,7 +356,7 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
         new.latency = 0;
         new.timeout = 500;
         esp_ble_gap_update_conn_params(&new);
-        
+
         //to allow more connections, we simply restart the adv process.
         esp_ble_gap_start_advertising(&hidd_adv_params);
         //xEventGroupClearBits(eventgroup_system,SYSTEM_CURRENTLY_ADVERTISING);
@@ -615,7 +375,7 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
                 break;
             }
         }
-				
+
         ESP_LOGI(HID_TAG, "ESP_HIDD_EVENT_BLE_DISCONNECT");
         esp_ble_gap_start_advertising(&hidd_adv_params);
         xEventGroupSetBits(eventgroup_system,SYSTEM_CURRENTLY_ADVERTISING);
@@ -683,7 +443,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 #endif
     }
     break;
-    //handle scan responses here...    
+    //handle scan responses here...
     case ESP_GAP_BLE_SCAN_RESULT_EVT: {
         uint8_t *adv_name = NULL;
         uint8_t adv_name_len = 0;
@@ -716,10 +476,10 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         default:
             break;
         }
-        
+
     }
         break;
-        
+
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
         //scan start complete event to indicate scan start successfully or failed
         if (param->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
@@ -728,7 +488,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         }
         ESP_LOGI(HID_TAG, "Scan start success");
         break;
-		
+
     default:
         break;
     }
@@ -761,7 +521,7 @@ void processCommand(struct cmdBuf *cmdBuffer)
     esp_ble_bond_dev_t * btdevlist;
     int counter;
     esp_err_t ret;
-  
+
 #if CONFIG_MODULE_USEJOYSTICK
     /**++++ (de-)activate joystick ++++*/
     if(strncmp(input,"JP",2) == 0)
@@ -771,14 +531,14 @@ void processCommand(struct cmdBuf *cmdBuffer)
         else config.joystick_active = 0;
         update_config();
         ESP_LOGI(EXT_UART_TAG,"new joystick state: %d, will show on next reboot", config.joystick_active);
-        cdc_write("JS:",strlen("JS:"));
-        if(joystate) cdc_write("1",1);
-        else cdc_write("0",1);
-        cdc_write(nl,sizeof(nl)); //newline
+        cdc_write_string("JS:");
+        if(joystate) cdc_write_string("1");
+        else cdc_write_string("0");
+        cdc_write_newline();
         return;
     }
 #endif
-    
+
     /**++++ set BLE appearance ++++*/
     if(strncmp(input,"AP", 2) == 0)
     {
@@ -788,40 +548,39 @@ void processCommand(struct cmdBuf *cmdBuffer)
             ESP_LOGI(EXT_UART_TAG,"setting appearance to NVS, will show on next reboot");
             nvs_set_u8(nvs_storage_h,"BLEAPPEAR",appv);
             nvs_commit(nvs_storage_h);
-            cdc_write("AP:",strlen("AP:"));
-            cdc_write(&input[2],1);
-            cdc_write(nl,sizeof(nl)); //newline
+            cdc_write_string("AP:");
+            tinyusb_cdcacm_write_queue_char(TINYUSB_CDC_ACM_0, input[2]);
         } else {
             ESP_LOGE(EXT_UART_TAG,"Cannot set appearance, value not correct. Use AP0 - AP4");
-            cdc_write("AP:invalid number, AP0-AP4",strlen("AP:invalid number, AP0-AP4"));
-            cdc_write(nl,sizeof(nl)); //newline
+            cdc_write_string("AP:invalid number, AP0-AP4");
         }
+        cdc_write_newline();
         return;
     }
-	
+
     /**++++en-/disable logging++++*/
     if(strcmp(input,"LG0") == 0)
     {
         esp_log_level_set("*",ESP_LOG_ERROR);
-        cdc_write("LOG:0",strlen("LOG:0"));
-        cdc_write(nl,sizeof(nl)); //newline
+        cdc_write_string("LOG:0");
+        cdc_write_newline();
         return;
     }
     if(strcmp(input,"LG1") == 0)
     {
         esp_log_level_set("*",ESP_LOG_INFO);
-        cdc_write("LOG:1",strlen("LOG:1"));
-        cdc_write(nl,sizeof(nl)); //newline
+        cdc_write_string("LOG:1");
+        cdc_write_newline();
         return;
     }
     if(strcmp(input,"LG2") == 0)
     {
         esp_log_level_set("*",ESP_LOG_DEBUG);
-        cdc_write("LOG:2",strlen("LOG:2"));
-        cdc_write(nl,sizeof(nl)); //newline
+        cdc_write_string("LOG:2");
+        cdc_write_newline();
         return;
     }
-	
+
     /**++++ key/value storing ++++*/
     if(strncmp(input,"CV ", 2) == 0)
     {
@@ -832,8 +591,8 @@ void processCommand(struct cmdBuf *cmdBuffer)
         //commit NVS storage
         ret = nvs_commit(nvs_storage_h);
         ESP_LOGI(EXT_UART_TAG,"cleared all NVS key/value pairs");
-        cdc_write("NVS:OK",strlen("NVS:OK"));
-        cdc_write(nl,sizeof(nl)); //newline
+        cdc_write_string("NVS:OK");
+        cdc_write_newline();
         return;
     }
     if(strncmp(input,"GV ", 3) == 0)
@@ -843,12 +602,12 @@ void processCommand(struct cmdBuf *cmdBuffer)
         strsep(&work, " ");
         //get key
         char *key = strsep(&work, " ");
-		
+
         //get data size from NVS, check if key is set
         size_t sizeData;
         char* nvspayload = NULL;
         ret = nvs_get_str(nvs_storage_h, key,NULL,&sizeData);
-		
+
         //if we have a data length, load string
         if(ret == ESP_OK)
         {
@@ -856,27 +615,26 @@ void processCommand(struct cmdBuf *cmdBuffer)
             nvspayload = malloc(sizeData);
             ret = nvs_get_str(nvs_storage_h, key, nvspayload, &sizeData);
         }
-		
+
         //OK or error?
         if(ret != ESP_OK)
         {
             //send back error message
             ESP_LOGI(EXT_UART_TAG,"error reading value: %s",esp_err_to_name(ret));
-            cdc_write("NVS:",strlen("NVS:"));
-            cdc_write(esp_err_to_name(ret), strlen(esp_err_to_name(ret)));
-            cdc_write(nl,sizeof(nl)); //newline
+            cdc_write_string("NVS:");
+            cdc_write_string(esp_err_to_name(ret));
         } else {
             ESP_LOGI(EXT_UART_TAG,"loaded - %s:%s",key,nvspayload);
-            cdc_write("NVS:",strlen("NVS:"));
-            cdc_write(nvspayload, strlen(nvspayload));
-            cdc_write(nl,sizeof(nl)); //newline
+            cdc_write_string("NVS:");
+            cdc_write_string(nvspayload);
         }
-		
+        cdc_write_newline();
+
         //done with the payload
         if(nvspayload) free(nvspayload);
         return;
     }
-	
+
     if(strncmp(input,"SV ", 3) == 0)
     {
         char* work = (char*)cmdBuffer->buf;
@@ -886,42 +644,42 @@ void processCommand(struct cmdBuf *cmdBuffer)
         char* key = strsep(&work, " ");
         //get payload
         char* nvspayload = work;
-		
+
         if(work == NULL)
         {
             ESP_LOGI(EXT_UART_TAG,"error setting string: no value provided");
-            cdc_write("NVS:ESP_ERR_NVS_NO_VALUE",strlen("NVS:ESP_ERR_NVS_NO_VALUE"));
-            cdc_write(nl,sizeof(nl)); //newline
+            cdc_write_string("NVS:ESP_ERR_NVS_NO_VALUE");
+            cdc_write_newline();
             return;
         }
-		
+
         //try to set string data to nvs
         ret = nvs_set_str(nvs_storage_h, key,nvspayload);
-		
+
         if(ret == ESP_OK)
         {
             //commit NVS storage
             ret = nvs_commit(nvs_storage_h);
         }
-		
+
         if(ret != ESP_OK)
         {
             //send back error message
             ESP_LOGI(EXT_UART_TAG,"error setting string: %s",esp_err_to_name(ret));
-            cdc_write("NVS:",strlen("NVS:"));
-            cdc_write(esp_err_to_name(ret), strlen(esp_err_to_name(ret)));
-            cdc_write(nl,sizeof(nl)); //newline
+            cdc_write_string("NVS:");
+            cdc_write_string(esp_err_to_name(ret));
         } else {
             //send back OK & used/free entries
             nvs_stats_t nvs_stats;
             nvs_get_stats(NULL, &nvs_stats);
             ESP_LOGI(EXT_UART_TAG,"set - %s:%s - used:%d,free:%d",key,nvspayload,nvs_stats.used_entries, nvs_stats.free_entries);
-            cdc_write("NVS:OK ", strlen("NVS:OK "));
+            cdc_write_string("NVS:OK ");
             char stats[64];
             sprintf(stats,"%d/%d - used/free",nvs_stats.used_entries, nvs_stats.free_entries);
-            cdc_write(stats,strnlen(stats,64));
-            cdc_write(nl,sizeof(nl)); //newline
+            cdc_write_string(stats);
         }
+        cdc_write_newline();
+
         return;
     }
 
@@ -935,24 +693,24 @@ void processCommand(struct cmdBuf *cmdBuffer)
         for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS; i++)
         {
             esp_bd_addr_t empty = {0,0,0,0,0,0};
-			
+
             //only select active connections
             if(memcmp(active_connections[i],empty,sizeof(esp_bd_addr_t)) != 0)
             {
                 //print on monitor & external uart
-                cdc_write("CONNECTED:",strlen("CONNECTED:"));
+                cdc_write_string("CONNECTED:");
                 esp_log_buffer_hex(EXT_UART_TAG, active_connections[i], sizeof(esp_bd_addr_t));
                 for (int t=0; t<sizeof(esp_bd_addr_t); t++) {
                     sprintf(hexnum,"%02X ",active_connections[i][t]);
-                    cdc_write(hexnum, 3);
+                    cdc_write_string(hexnum);
                 }
-                cdc_write(nl,sizeof(nl)); //newline
+                cdc_write_newline();
             }
         }
         ESP_LOGI(EXT_UART_TAG,"---------------------------------------");
         return;
     }
-    //switch between BT devices which are connected... 
+    //switch between BT devices which are connected...
     if(input[0] == 'S' && input[1] == 'W')
     {
         if(len >= 15)
@@ -962,13 +720,13 @@ void processCommand(struct cmdBuf *cmdBuffer)
                 if(input[i*2+3] >= '0' && input[i*2+3] <= '9') newaddr[i] = (input[i*2+3] - '0')<<4;
                 if(input[i*2+3] >= 'a' && input[i*2+3] <= 'f') newaddr[i] = (input[i*2+3] + 10 - 'a')<<4;
                 if(input[i*2+3] >= 'A' && input[i*2+3] <= 'F') newaddr[i] = (input[i*2+3] + 10 - 'A')<<4;
-				
+
                 if(input[i*2+1+3] >= '0' && input[i*2+1+3] <= '9') newaddr[i] |= input[i*2+1+3] - '0';
                 if(input[i*2+1+3] >= 'a' && input[i*2+1+3] <= 'f') newaddr[i] |= input[i*2+1+3] + 10 - 'a';
                 if(input[i*2+1+3] >= 'A' && input[i*2+1+3] <= 'F') newaddr[i] |= input[i*2+1+3] + 10 - 'A';
             }
             esp_log_buffer_hex(HID_TAG, newaddr, 6);
-			
+
             for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS; i++)
             {
                 //check if this addr is in the array
@@ -985,13 +743,13 @@ void processCommand(struct cmdBuf *cmdBuffer)
         }
         return;
     }
-    
-    
+
+
     //get module ID
     if(strcmp(input,"ID") == 0)
     {
-        cdc_write(MODULE_ID, sizeof(MODULE_ID));
-        cdc_write(nl, sizeof(nl));
+        cdc_write_string(MODULE_ID);
+        cdc_write_newline();
         ESP_LOGI(EXT_UART_TAG,"ID: %s",MODULE_ID);
         return;
     }
@@ -1049,11 +807,11 @@ void processCommand(struct cmdBuf *cmdBuffer)
                     for(uint8_t i = 0; i<counter; i++)
                     {
                         //print on monitor & external uart
-                        cdc_write("PAIRING:",strlen("PAIRING:"));
+                        cdc_write_string("PAIRING:");
                         esp_log_buffer_hex(EXT_UART_TAG, btdevlist[i].bd_addr, sizeof(esp_bd_addr_t));
                         for (int t=0; t<sizeof(esp_bd_addr_t); t++) {
                             sprintf(hexnum,"%02X ",btdevlist[i].bd_addr[t]);
-                            cdc_write(hexnum, 3);
+                            cdc_write_string(hexnum);
                         }
                         //print out name
                         char btname[64];
@@ -1061,23 +819,23 @@ void processCommand(struct cmdBuf *cmdBuffer)
                         char key[13];
                         sprintf(key,"%02X%02X%02X%02X%02X%02X",btdevlist[i].bd_addr[0],btdevlist[i].bd_addr[1], \
                                 btdevlist[i].bd_addr[2],btdevlist[i].bd_addr[3],btdevlist[i].bd_addr[4],btdevlist[i].bd_addr[5]);
-                        
+
                         if(nvs_get_str(nvs_bt_name_h,key,btname,&name_len) == ESP_OK)
                         {
                             sprintf(hexnum," - ");
-                            cdc_write(hexnum, 3);
-                            cdc_write(btname, name_len);
+                            cdc_write_string(hexnum);
+                            cdc_write_string(btname);
                             ESP_LOGI(EXT_UART_TAG,"%s",btname);
                         }
                         else ESP_LOGW(EXT_UART_TAG,"cannot find name for addr.");
-                        cdc_write(nl,sizeof(nl)); //newline
+                        cdc_write_newline();
                     }
                     ESP_LOGI(EXT_UART_TAG,"---------------------------------------");
                 } else ESP_LOGW(EXT_UART_TAG,"error getting device list");
             } else ESP_LOGE(EXT_UART_TAG,"error allocating memory for device list");
         } else {
             ESP_LOGI(EXT_UART_TAG,"error getting bonded devices count or no devices bonded");
-            cdc_write("END\r\n", 5);
+            cdc_write_string("END\r\n");
         }
         return;
     }
@@ -1122,7 +880,7 @@ void processCommand(struct cmdBuf *cmdBuffer)
                         {
                             esp_ble_remove_bond_device(btdevlist[i].bd_addr);
                             esp_ble_gap_update_whitelist(false,btdevlist[i].bd_addr,BLE_WL_ADDR_TYPE_PUBLIC);
-                            esp_ble_gap_update_whitelist(false,btdevlist[i].bd_addr,BLE_WL_ADDR_TYPE_RANDOM); 
+                            esp_ble_gap_update_whitelist(false,btdevlist[i].bd_addr,BLE_WL_ADDR_TYPE_RANDOM);
                         }
                     }
                 } else ESP_LOGI(EXT_UART_TAG,"error getting device list");
@@ -1149,33 +907,6 @@ void processCommand(struct cmdBuf *cmdBuffer)
         return;
     }
 
-    //UG: triggering update mode of ESP by restarting into "factory partition"
-    if (strcmp(input, "UG") == 0)
-    {
-        esp_partition_iterator_t pi;
-
-        pi = esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
-
-        if (pi != NULL) {
-            const esp_partition_t* factory = esp_partition_get(pi);
-            esp_partition_iterator_release(pi);
-            if (esp_ota_set_boot_partition(factory) == ESP_OK) {
-                cdc_write("OTA:start", strlen("OTA:start"));
-                cdc_write(nl, sizeof(nl));
-                ESP_LOGI(EXT_UART_TAG, "Addon board in upgrade mode");
-                esp_restart();
-            }else {
-                ESP_LOGI(EXT_UART_TAG, "Booting factory partition not possible");
-                cdc_write("OTA:not possible", strlen("OTA:not possible"));
-                cdc_write(nl, sizeof(nl));
-            }
-        } else {
-            ESP_LOGI(EXT_UART_TAG, "Factory partition not found");
-            cdc_write("OTA:not possible", strlen("OTA:not possible"));
-            cdc_write(nl, sizeof(nl));
-        }
-        return;
-    }
     ESP_LOGW(EXT_UART_TAG,"No command executed with: %s ; len= %d\n",input,len);
 }
 
@@ -1220,7 +951,7 @@ void uart_parse_command (uint8_t character, struct cmdBuf * cmdBuffer)
                     } else {
                         esp_hidd_send_keyboard_value(hid_conn_id,cmdBuffer->buf[0],&cmdBuffer->buf[2],6);
                     }
-                    
+
                     //update timestamp
                     timestampLastSent = esp_timer_get_time();
                 } else if (cmdBuffer->buf[1] == 0x01) {  // joystick report
@@ -1288,8 +1019,11 @@ void cdc_bridge_task(void *pvParameters)
     while(1)
     {
         // read & process a single byte
-        cdc_read((uint8_t*) &character, 1, portMAX_DELAY);
-        uart_parse_command(character, &cmdBuffer);
+        size_t read_len;
+        tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*) &character, 1, &read_len);
+        if( read_len > 0 ) {
+            uart_parse_command(character, &cmdBuffer);
+        }
     }
 }
 
@@ -1301,17 +1035,8 @@ void app_main(void)
 {
     esp_err_t ret;
 
-    init_serial_no();
-    init_usb_phy();
+    init_usb_cdc();
 
-    tusb_init();
-    xTaskCreate(tusb_device_task, "tusb_device_task", 4 * 1024, NULL, 5, NULL);
-
-    if( init_usb_rxtx() != ESP_OK ) {
-        return;
-    }
-
-    
     // Initialize FreeRTOS elements
     eventgroup_system = xEventGroupCreate();
     if(eventgroup_system == NULL) ESP_LOGE(HID_TAG, "Cannot initialize event group");
@@ -1365,17 +1090,17 @@ void app_main(void)
     if((ret = esp_hidd_profile_init()) != ESP_OK) {
         ESP_LOGE(HID_TAG, "%s init bluedroid failed\n", __func__);
     }
-    
+
     //open NVS handle for storing BT device names
     ESP_LOGI("MAIN","opening NVS handle for BT names");
     ret = nvs_open("btnames", NVS_READWRITE, &nvs_bt_name_h);
     if(ret != ESP_OK) ESP_LOGE("MAIN","error opening NVS for bt names");
-    
+
     //open NVS handle for key/value storage via UART
     ESP_LOGI("MAIN","opening NVS handle for key/value storage");
     ret = nvs_open("kvstorage", NVS_READWRITE, &nvs_storage_h);
     if(ret != ESP_OK) ESP_LOGE("MAIN","error opening NVS for key/value storage");
-    
+
     //read the appearance value for advertising
     uint8_t advapp;
     ret = nvs_get_u8(nvs_storage_h,"BLEAPPEAR",&advapp);
@@ -1384,7 +1109,7 @@ void app_main(void)
         ESP_LOGI("MAIN","Setting appearance to 0x03C%d",advapp);
         hidd_adv_data.appearance = 0x03C0 + advapp;
     }
-    
+
     // Read config
     nvs_handle my_handle;
     ESP_LOGI("MAIN","loading configuration from NVS");
@@ -1405,7 +1130,7 @@ void app_main(void)
     nvs_get_u8(my_handle, "joyactive", &config.joystick_active);
     ESP_LOGI("MAIN","Joystick: %d",config.joystick_active);
 #endif
-    
+
     //get locale
     ret = nvs_get_u8(my_handle, "locale", &config.locale);
     //if(ret != ESP_OK || config.locale >= LAYOUT_MAX)
@@ -1417,7 +1142,7 @@ void app_main(void)
     } else ESP_LOGI("MAIN","locale code is : %d",config.locale);
     nvs_close(my_handle);
     ///@todo How to handle the locale here? We have the memory for full lookups on the ESP32, but how to communicate this with the Teensy?
-    
+
     ///clear the HID connection IDs&MACs
     for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS;i++)
     {
@@ -1443,10 +1168,10 @@ void app_main(void)
        and the init key means which key you can distribute to the slave. */
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
-    
+
     //start active scan
     xTaskCreate(&cdc_bridge_task, "bridge", 4096, NULL, configMAX_PRIORITIES, NULL);
-    
+
     //start periodic timer to send HID reports
     const esp_timer_create_args_t periodic_timer_args = {
         .callback = &periodicHIDCallback,
@@ -1457,7 +1182,7 @@ void app_main(void)
     esp_timer_create(&periodic_timer_args, &periodic_timer);
     //call every 100ms
     esp_timer_start_periodic(periodic_timer, 100000);
-    
+
     //avoid unused variable warnings here:
     (void)hidd_adv_resp;
     (void)scan_params;

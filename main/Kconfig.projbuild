@@ -1,22 +1,4 @@
 menu "HID_SERIAL_BRIDGE Config"      
-    config BRIDGE_USB_VID
-        hex "USB vendor ID"
-        default 0x303A
-        help
-            USB Vendor ID for the bridge device
-
-    config BRIDGE_USB_PID
-        hex "USB product ID"
-        default 0x1002
-        help
-            USB Product ID for the bridge device
-
-    config BRIDGE_MANUFACTURER
-        string "USB bridge manufacturer"
-        default "clackups"
-        help
-            Manufacturer string shown in USB device descriptor
-
     config BRIDGE_PRODUCT_NAME
         string "USB product name"
         default "HID Serial Bridge"
