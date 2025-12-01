@@ -190,6 +190,42 @@ int get_int(const char * input, int index, int * value)
 
 
 
+int hex_str_to_bytes(const char *input, size_t input_len,
+                     uint8_t *output, size_t *output_len) {
+  if (input_len % 2 != 0) {
+    return -1;
+  }
+  
+  size_t out_idx = 0;
+  for (size_t in_idx = 0; in_idx < input_len; in_idx++) {
+      char c = input[in_idx];
+      uint8_t v = 0;
+      if (c >= '0' && c <= '9') {
+          v = (uint8_t)(c - '0');
+      }
+      else if (c >= 'A' && c <= 'F') {
+          v = (uint8_t)(c - 'A' + 10);
+      }
+      else if (c >= 'a' && c <= 'f') {
+          v = (uint8_t)(c - 'a' + 10);
+      }
+      else {
+          return -1;
+      }
+
+      if ( in_idx % 2 == 0 ) {
+          output[out_idx] = v * 16;
+      }
+      else {
+          output[out_idx] += v;
+          out_idx++;
+      }
+  }
+  *output_len = out_idx;
+  return 0;
+}
+
+
 
 /** Periodic sending of empty HID reports if no updates are sent via API */
 static void periodicHIDCallback(void* arg)
@@ -226,7 +262,8 @@ void printConnectedDevicesTable()
     {
         ESP_LOGI(HID_TAG, "%d: HID connection ID: %d",i,active_hid_conn_ids[i]);
         ESP_LOGI(HID_TAG, "%d: remote BD_ADDR: %08x%04x",i,
-		 (active_connections[i][0] << 24) + (active_connections[i][1] << 16) + (active_connections[i][2] << 8) + active_connections[i][3],
+		 (active_connections[i][0] << 24) + (active_connections[i][1] << 16) +
+                 (active_connections[i][2] << 8) + active_connections[i][3],
 		 (active_connections[i][4] << 8) + active_connections[i][5]);
     }
 }
@@ -239,8 +276,6 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
     switch(event) {
     case ESP_HIDD_EVENT_REG_FINISH: {
         if (param->init_finish.state == ESP_HIDD_INIT_OK) {
-            //esp_bd_addr_t rand_addr = {0x04,0x11,0x11,0x11,0x11,0x05};
-            esp_ble_gap_set_device_name(config.bt_device_name);
             esp_ble_gap_config_adv_data(&hidd_adv_data);
         }
         break;
@@ -314,6 +349,7 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
     return;
 }
 
+
 static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
     switch (event) {
@@ -342,8 +378,6 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         if(!param->ble_security.auth_cmpl.success) {
             ESP_LOGW(HID_TAG, "fail reason = 0x%x",param->ble_security.auth_cmpl.fail_reason);
         } 
-#if CONFIG_MODULE_BT_PAIRING
-        //add connected device to whitelist (necessary if whitelist connections only).
         if(esp_ble_gap_update_whitelist(true,bd_addr,BLE_WL_ADDR_TYPE_PUBLIC) != ESP_OK)
         {
             ESP_LOGW(HID_TAG,"cannot add device to whitelist, with public address");
@@ -354,11 +388,11 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         {
             ESP_LOGW(HID_TAG,"cannot add device to whitelist, with random address");
         }
-#endif
     }
     break;
     //handle scan responses here...
-    case ESP_GAP_BLE_SCAN_RESULT_EVT: {
+    case ESP_GAP_BLE_SCAN_RESULT_EVT:
+    {
         uint8_t *adv_name = NULL;
         uint8_t adv_name_len = 0;
         esp_ble_gap_cb_param_t *scan_result = (esp_ble_gap_cb_param_t *)param;
@@ -367,7 +401,9 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
             //esp_log_buffer_hex(HID_TAG, scan_result->scan_rst.bda, 6);
             //ESP_LOGI(HID_TAG, "Searched Adv Data Len %d, Scan Response Len %d", scan_result->scan_rst.adv_data_len, scan_result->scan_rst.scan_rsp_len);
             adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &adv_name_len);
-            if(adv_name_len == 0) adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv, ESP_BLE_AD_TYPE_NAME_SHORT, &adv_name_len);
+            if(adv_name_len == 0) {
+                adv_name = esp_ble_resolve_adv_data(scan_result->scan_rst.ble_adv, ESP_BLE_AD_TYPE_NAME_SHORT, &adv_name_len);
+            }
             //ESP_LOGI(HID_TAG, "Searched Device Name Len %d", adv_name_len);
             //esp_log_buffer_char(HID_TAG, adv_name, adv_name_len);
             //ESP_LOGI(HID_TAG, "\n");
@@ -377,12 +413,17 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
                 esp_log_buffer_char(HID_TAG, adv_name, adv_name_len);
                 adv_name[adv_name_len] = '\0';
                 char key[13];
-                sprintf(key,"%02X%02X%02X%02X%02X%02X",scan_result->scan_rst.bda[0],scan_result->scan_rst.bda[1], \
-                        scan_result->scan_rst.bda[2],scan_result->scan_rst.bda[3],scan_result->scan_rst.bda[4],scan_result->scan_rst.bda[5]);
+                sprintf(key,"%02X%02X%02X%02X%02X%02X",
+                        scan_result->scan_rst.bda[0],scan_result->scan_rst.bda[1],
+                        scan_result->scan_rst.bda[2],scan_result->scan_rst.bda[3],
+                        scan_result->scan_rst.bda[4],scan_result->scan_rst.bda[5]);
                 if(nvs_set_str(nvs_bt_name_h,key,(char*)adv_name) == ESP_OK)
                 {
                     ESP_LOGI(HID_TAG,"Saved %s to %s",adv_name, key);
-                } else ESP_LOGW(HID_TAG,"Error saving %s for %s",adv_name,key);
+                }
+                else {
+                    ESP_LOGW(HID_TAG,"Error saving %s for %s",adv_name,key);
+                }
             }
             break;
         case ESP_GAP_SEARCH_INQ_CMPL_EVT:
@@ -390,10 +431,9 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         default:
             break;
         }
-
     }
-        break;
-
+    break;
+    
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
         //scan start complete event to indicate scan start successfully or failed
         if (param->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
@@ -409,378 +449,6 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 }
 
 
-void processCommand(struct cmdBuf *cmdBuffer)
-{
-    //commands:
-    // $ID
-    // $PMx (0 or 1)
-    // $GP
-    // $DPx (number of paired device, starting with 0)
-    // $SW aabbccddeeff (select a BT addr to send the HID commands to)
-    // $GC get connected devices
-    // $NAME set name of bluetooth device
-    // $JPx (0,1) en- / disable the joystick interface (for iOS compatibility) [available if compiled with Joystick support]
-    // $APx (0-4) Set the appearance value for advertising (0x03C0 - 0x03C4; default is mouse). See https://specificationrefs.bluetooth.com/assigned-values/Appearance%20Values.pdf page 8
-    // $GV <key>  get the value of the given key from NVS. Note: no spaces in <key>! max. key length: 15
-    // $SV <key> <value> set the value of the given key & store to NVS. Note: no spaces in <key>!
-    // $CV clear all key/value pairs set with $SV
-    // $UG start flash update by searching for factory partition and rebooting there. Warning: not possible to boot back without flashing!
-    // $LGx (0,1,2): enable / disable logging system of ESP32.0 is level error, 1 is level info, 2 is level debug
-
-    if(cmdBuffer->bufferLength < 2) return;
-    //easier this way than typecast in each str* function
-    const char *input = (const char *) cmdBuffer->buf;
-    int len = cmdBuffer->bufferLength;
-    const char *nl = "\r\n";
-    esp_ble_bond_dev_t * btdevlist;
-    int counter;
-    esp_err_t ret;
-
-    /**++++ (de-)activate joystick ++++*/
-    if(strncmp(input,"JP",2) == 0)
-    {
-        uint8_t joystate = input[2] - '0';
-        if(joystate) config.joystick_active = 1;
-        else config.joystick_active = 0;
-        ESP_LOGI(CTRL_TAG,"new joystick state: %d, will show on next reboot", config.joystick_active);
-        cdc_write_string("JS:");
-        if(joystate) cdc_write_string("1");
-        else cdc_write_string("0");
-        cdc_write_newline();
-        return;
-    }
-
-
-    /**++++en-/disable logging++++*/
-    if(strcmp(input,"LG0") == 0)
-    {
-        esp_log_level_set("*",ESP_LOG_ERROR);
-        cdc_write_string("LOG:0");
-        cdc_write_newline();
-        return;
-    }
-    if(strcmp(input,"LG1") == 0)
-    {
-        esp_log_level_set("*",ESP_LOG_INFO);
-        cdc_write_string("LOG:1");
-        cdc_write_newline();
-        return;
-    }
-    if(strcmp(input,"LG2") == 0)
-    {
-        esp_log_level_set("*",ESP_LOG_DEBUG);
-        cdc_write_string("LOG:2");
-        cdc_write_newline();
-        return;
-    }
-
-
-    /**++++ commands without parameters ++++*/
-    //get connected devices
-    if(strcmp(input,"GC") == 0)
-    {
-        char hexnum[5];
-        ESP_LOGI(CTRL_TAG,"connected devices (starting with index 0):");
-        ESP_LOGI(CTRL_TAG,"---------------------------------------");
-        for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS; i++)
-        {
-            esp_bd_addr_t empty = {0,0,0,0,0,0};
-
-            //only select active connections
-            if(memcmp(active_connections[i],empty,sizeof(esp_bd_addr_t)) != 0)
-            {
-                //print on monitor & external uart
-                cdc_write_string("CONNECTED:");
-                esp_log_buffer_hex(CTRL_TAG, active_connections[i], sizeof(esp_bd_addr_t));
-                for (int t=0; t<sizeof(esp_bd_addr_t); t++) {
-                    sprintf(hexnum,"%02X ",active_connections[i][t]);
-                    cdc_write_string(hexnum);
-                }
-                cdc_write_newline();
-            }
-        }
-        ESP_LOGI(CTRL_TAG,"---------------------------------------");
-        return;
-    }
-    //switch between BT devices which are connected...
-    if(input[0] == 'S' && input[1] == 'W')
-    {
-        if(len >= 15)
-        {
-            esp_bd_addr_t newaddr;
-            for(uint8_t i = 0; i<6; i++) {
-                if(input[i*2+3] >= '0' && input[i*2+3] <= '9') newaddr[i] = (input[i*2+3] - '0')<<4;
-                if(input[i*2+3] >= 'a' && input[i*2+3] <= 'f') newaddr[i] = (input[i*2+3] + 10 - 'a')<<4;
-                if(input[i*2+3] >= 'A' && input[i*2+3] <= 'F') newaddr[i] = (input[i*2+3] + 10 - 'A')<<4;
-
-                if(input[i*2+1+3] >= '0' && input[i*2+1+3] <= '9') newaddr[i] |= input[i*2+1+3] - '0';
-                if(input[i*2+1+3] >= 'a' && input[i*2+1+3] <= 'f') newaddr[i] |= input[i*2+1+3] + 10 - 'a';
-                if(input[i*2+1+3] >= 'A' && input[i*2+1+3] <= 'F') newaddr[i] |= input[i*2+1+3] + 10 - 'A';
-            }
-            esp_log_buffer_hex(HID_TAG, newaddr, 6);
-
-            for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS; i++)
-            {
-                //check if this addr is in the array
-                if(memcmp(active_connections[i],newaddr,sizeof(esp_bd_addr_t)) == 0)
-                {
-                    ESP_LOGI(CTRL_TAG, "New hid_conn_id: %d",i);
-                    hid_conn_id = i;
-                    return;
-                }
-            }
-            ESP_LOGW(CTRL_TAG,"Cannot find BT MAC in connections");
-        } else {
-            ESP_LOGW(CTRL_TAG,"Command to short (need full BT MAC addr): %d",len);
-        }
-        return;
-    }
-
-
-    //get module ID
-    if(strcmp(input,"ID") == 0)
-    {
-        cdc_write_string(MODULE_ID);
-        cdc_write_newline();
-        ESP_LOGI(CTRL_TAG,"ID: %s",MODULE_ID);
-        return;
-    }
-    //disable pairing
-    if(strcmp(input,"PM0") == 0)
-    {
-#if CONFIG_MODULE_BT_PAIRING
-        ESP_LOGI(CTRL_TAG,"$PM0 - disabling pairing");
-        if(hidd_adv_params.adv_filter_policy == ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY)
-        {
-            //restart advertising with whitelisted connection only (no connection is possible if not
-            // on whitelist)
-            hidd_adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST;
-            esp_ble_gap_start_advertising(&hidd_adv_params);
-        }
-#else
-        ESP_LOGW(CTRL_TAG,"Not available, cannot change pairing state (bug in esp-idf)");
-#endif
-        return;
-    }
-    //enable pairing
-    if(strcmp(input,"PM1") == 0)
-    {
-#if CONFIG_MODULE_BT_PAIRING
-        ESP_LOGI(CTRL_TAG,"$PM1 - enabling pairing");
-        if(hidd_adv_params.adv_filter_policy == ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST)
-        {
-            //restart advertising with open connection
-            hidd_adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
-            esp_ble_gap_start_advertising(&hidd_adv_params);
-        }
-#else
-        ESP_LOGW(CTRL_TAG,"Not available, cannot change pairing state (bug in esp-idf)");
-#endif
-        return;
-    }
-
-    //get all BT pairings
-    if(strcmp(input,"GP") == 0)
-    {
-        counter = esp_ble_get_bond_device_num();
-        char hexnum[5];
-
-        if(counter > 0)
-        {
-            btdevlist = (esp_ble_bond_dev_t *) malloc(sizeof(esp_ble_bond_dev_t)*counter);
-            if(btdevlist != NULL)
-            {
-                if(esp_ble_get_bond_device_list(&counter,btdevlist) == ESP_OK)
-                {
-                    ESP_LOGI(CTRL_TAG,"bonded devices (starting with index 0):");
-                    ESP_LOGI(CTRL_TAG,"---------------------------------------");
-                    for(uint8_t i = 0; i<counter; i++)
-                    {
-                        //print on monitor & external uart
-                        cdc_write_string("PAIRING:");
-                        esp_log_buffer_hex(CTRL_TAG, btdevlist[i].bd_addr, sizeof(esp_bd_addr_t));
-                        for (int t=0; t<sizeof(esp_bd_addr_t); t++) {
-                            sprintf(hexnum,"%02X ",btdevlist[i].bd_addr[t]);
-                            cdc_write_string(hexnum);
-                        }
-                        //print out name
-                        char btname[64];
-                        size_t name_len = 0;
-                        char key[13];
-                        sprintf(key,"%02X%02X%02X%02X%02X%02X",btdevlist[i].bd_addr[0],btdevlist[i].bd_addr[1], \
-                                btdevlist[i].bd_addr[2],btdevlist[i].bd_addr[3],btdevlist[i].bd_addr[4],btdevlist[i].bd_addr[5]);
-
-                        if(nvs_get_str(nvs_bt_name_h,key,btname,&name_len) == ESP_OK)
-                        {
-                            sprintf(hexnum," - ");
-                            cdc_write_string(hexnum);
-                            cdc_write_string(btname);
-                            ESP_LOGI(CTRL_TAG,"%s",btname);
-                        }
-                        else ESP_LOGW(CTRL_TAG,"cannot find name for addr.");
-                        cdc_write_newline();
-                    }
-                    ESP_LOGI(CTRL_TAG,"---------------------------------------");
-                } else ESP_LOGW(CTRL_TAG,"error getting device list");
-            } else ESP_LOGE(CTRL_TAG,"error allocating memory for device list");
-        } else {
-            ESP_LOGI(CTRL_TAG,"error getting bonded devices count or no devices bonded");
-            cdc_write_string("END\r\n");
-        }
-        return;
-    }
-
-
-    //DP: delete one pairing
-    if(input[0] == 'D' && input[1] == 'P')
-    {
-        int index_to_remove;
-        if (!(get_int(input,2,&index_to_remove))) {
-            ESP_LOGI(CTRL_TAG,"DP: no integer, deleting all bonded devices");
-            index_to_remove = -1;
-        }
-
-        counter = esp_ble_get_bond_device_num();
-        if(counter == 0)
-        {
-            ESP_LOGI(CTRL_TAG,"error deleting device, no paired devices");
-            return;
-        }
-
-        if(index_to_remove >= counter)
-        {
-            ESP_LOGW(CTRL_TAG,"error deleting device, number out of range");
-            return;
-        }
-        if(counter >= 0)
-        {
-            btdevlist = (esp_ble_bond_dev_t *) malloc(sizeof(esp_ble_bond_dev_t)*counter);
-            if(btdevlist != NULL)
-            {
-                if(esp_ble_get_bond_device_list(&counter,btdevlist) == ESP_OK)
-                {
-                    //deleting only one pairing (-> -1 == delete all)
-                    if(index_to_remove >= 0)
-                    {
-                        esp_ble_remove_bond_device(btdevlist[index_to_remove].bd_addr);
-                        esp_ble_gap_update_whitelist(false,btdevlist[index_to_remove].bd_addr,BLE_WL_ADDR_TYPE_PUBLIC);
-                        esp_ble_gap_update_whitelist(false,btdevlist[index_to_remove].bd_addr,BLE_WL_ADDR_TYPE_RANDOM);
-                    } else {
-                        for(int i = 0; i<counter; i++)
-                        {
-                            esp_ble_remove_bond_device(btdevlist[i].bd_addr);
-                            esp_ble_gap_update_whitelist(false,btdevlist[i].bd_addr,BLE_WL_ADDR_TYPE_PUBLIC);
-                            esp_ble_gap_update_whitelist(false,btdevlist[i].bd_addr,BLE_WL_ADDR_TYPE_RANDOM);
-                        }
-                    }
-                } else ESP_LOGI(CTRL_TAG,"error getting device list");
-                free (btdevlist);
-                //wait 20 ticks for everything to settle (write commits to NVS)
-                vTaskDelay(20);
-                //then restart to avoid re-bonding of the device(s).
-                esp_restart();
-            } else ESP_LOGW(CTRL_TAG,"error allocating memory for device list");
-        } else ESP_LOGW(CTRL_TAG,"error getting bonded devices count");
-        return;
-    }
-
-    ESP_LOGW(CTRL_TAG,"No command executed with: %s ; len= %d\n",input,len);
-}
-
-
-void uart_parse_command (uint8_t character, struct cmdBuf * cmdBuffer)
-{
-    switch (cmdBuffer->state) {
-
-    case CMDSTATE_IDLE:
-        if (character==0xfd) {
-            cmdBuffer->bufferLength=0;
-            cmdBuffer->expectedBytes=8;   // 8 bytes for raw report size
-            cmdBuffer->state=CMDSTATE_GET_RAW;
-        }
-        else if (character == '$') {
-            cmdBuffer->bufferLength=0;   // we will read an ASCII-command until CR or LF
-            cmdBuffer->state=CMDSTATE_GET_ASCII;
-        }
-        break;
-
-    case CMDSTATE_GET_RAW:
-        cmdBuffer->buf[cmdBuffer->bufferLength]=character;
-        if ((cmdBuffer->bufferLength == 1) && (character==0x01)) { // we have a joystick report: increase by 5 bytes
-            cmdBuffer->expectedBytes += 5;
-            //ESP_LOGI(CTRL_TAG,"expecting 5 more bytes for joystick");
-        }
-
-        cmdBuffer->bufferLength++;
-        cmdBuffer->expectedBytes--;
-        if (!cmdBuffer->expectedBytes) {
-            if(!isConnected()) {
-                ESP_LOGI(CTRL_TAG,"not connected, cannot send report");
-            } else {
-                if (cmdBuffer->buf[1] == 0x00) {   // keyboard report
-                    //if hid_conn_id is set (!= -1) we send to one device only. Send to all otherwise
-                    if(hid_conn_id == -1)
-                    {
-                        for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS; i++)
-                        {
-                            if(active_hid_conn_ids[i] != -1) esp_hidd_send_keyboard_value(active_hid_conn_ids[i],cmdBuffer->buf[0],&cmdBuffer->buf[2],6);
-                        }
-                    } else {
-                        esp_hidd_send_keyboard_value(hid_conn_id,cmdBuffer->buf[0],&cmdBuffer->buf[2],6);
-                    }
-
-                    //update timestamp
-                    timestampLastSent = esp_timer_get_time();
-                } else if (cmdBuffer->buf[1] == 0x01) {  // joystick report
-                    ESP_LOGI(CTRL_TAG,"joystick: axis: 0x%X:0x%X:0x%X:0x%X, hat: %d",cmdBuffer->buf[2],cmdBuffer->buf[3],cmdBuffer->buf[4],cmdBuffer->buf[5],cmdBuffer->buf[8]);
-                    ESP_LOGI(CTRL_TAG,"joystick: buttons: 0x%X:0x%X:0x%X:0x%X",cmdBuffer->buf[9],cmdBuffer->buf[10],cmdBuffer->buf[11],cmdBuffer->buf[12]);
-                    //@todo should be HID_JOYSTICK_IN_RPT_LEN, but not available here.
-                    uint8_t joy[11];
-                    memcpy(joy,&cmdBuffer->buf[2],11);
-                    //send joystick report
-                    for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS; i++)
-                    {
-                        if(active_hid_conn_ids[i] != -1) esp_hidd_send_joy_report(active_hid_conn_ids[i],joy);
-                    }
-                } else if (cmdBuffer->buf[1] == 0x03) {  // mouse report
-                    if(hid_conn_id == -1)
-                    {
-                        for(uint8_t i = 0; i<CONFIG_BT_ACL_CONNECTIONS; i++)
-                        {
-                            if(active_hid_conn_ids[i] != -1) esp_hidd_send_mouse_value(active_hid_conn_ids[i],cmdBuffer->buf[2],cmdBuffer->buf[3],cmdBuffer->buf[4],cmdBuffer->buf[5]);
-                        }
-                    } else {
-                        esp_hidd_send_mouse_value(hid_conn_id,cmdBuffer->buf[2],cmdBuffer->buf[3],cmdBuffer->buf[4],cmdBuffer->buf[5]);
-                    }
-                    //update timestamp
-                    timestampLastSent = esp_timer_get_time();
-                    //and save mouse button state
-                    mouseButtons = cmdBuffer->buf[2];
-                    //ESP_LOGI(CTRL_TAG,"m: %d/%d",cmdBuffer->buf[3],cmdBuffer->buf[4]);
-                }
-                else ESP_LOGW(CTRL_TAG,"Unknown RAW HID packet");
-            }
-            cmdBuffer->state=CMDSTATE_IDLE;
-        }
-        break;
-
-    case CMDSTATE_GET_ASCII:
-        // collect a command string until CR or LF are received
-        if ((character==0x0d) || (character==0x0a))  {
-            cmdBuffer->buf[cmdBuffer->bufferLength]=0;
-            ESP_LOGI(CTRL_TAG,"sending command to parser: %s",cmdBuffer->buf);
-
-            processCommand(cmdBuffer);
-            cmdBuffer->state=CMDSTATE_IDLE;
-        } else {
-            if (cmdBuffer->bufferLength < MAX_CMDLEN-1)
-                cmdBuffer->buf[cmdBuffer->bufferLength++]=character;
-        }
-        break;
-    default:
-        cmdBuffer->state=CMDSTATE_IDLE;
-    }
-}
 
 
 /*
@@ -798,15 +466,13 @@ void cdc_bridge_task(void *pvParameters)
 {
     ESP_LOGI(CTRL_TAG,"CDC Bridge task started");
     char character;
-    struct cmdBuf cmdBuffer;
-    cmdBuffer.state=CMDSTATE_IDLE;
     while(1)
     {
         // read & process a single byte
         size_t read_len;
         tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*) &character, 1, &read_len);
         if( read_len > 0 ) {
-            uart_parse_command(character, &cmdBuffer);
+            // parse the command
         }
         vTaskDelay(1);
     }
@@ -894,7 +560,7 @@ void app_main(void)
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
 
     //start the bridge job
-    xTaskCreate(&cdc_bridge_task, "bridge", 4096, NULL, BRIDGE_TASK_PRIO, NULL);
+    // xTaskCreate(&cdc_bridge_task, "bridge", 4096, NULL, BRIDGE_TASK_PRIO, NULL);
 
     //start periodic timer to send HID reports
     const esp_timer_create_args_t periodic_timer_args = {
