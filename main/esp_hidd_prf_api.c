@@ -40,7 +40,7 @@ esp_err_t esp_hidd_register_callbacks(esp_hidd_event_cb_t callbacks, uint8_t ena
     esp_err_t hidd_status;
 
     if(callbacks != NULL) {
-   	    hidd_le_env.hidd_cb = callbacks;
+        hidd_le_env.hidd_cb = callbacks;
     } else {
         return ESP_FAIL;
     }
@@ -57,16 +57,16 @@ esp_err_t esp_hidd_register_callbacks(esp_hidd_event_cb_t callbacks, uint8_t ena
     
     ///@note It seems that the MTU has no effect on compatibility. The BLE stack works with all systems without setting the MTU to 23Bytes.
     /*hidd_status = esp_ble_gatt_set_local_mtu(23);
-    if (hidd_status != ESP_OK){
-        ESP_LOGE(HID_LE_PRF_TAG, "set local  MTU failed, error code = %x", hidd_status);
-    }*/
+      if (hidd_status != ESP_OK){
+      ESP_LOGE(HID_LE_PRF_TAG, "set local  MTU failed, error code = %x", hidd_status);
+      }*/
    
     return hidd_status;
 }
 
 esp_err_t esp_hidd_profile_init(void)
 {
-	if (hidd_le_env.enabled) {
+    if (hidd_le_env.enabled) {
         ESP_LOGE(HID_LE_PRF_TAG, "HID device profile already initialized");
         return ESP_FAIL;
     }
@@ -85,11 +85,11 @@ esp_err_t esp_hidd_profile_deinit(void)
     }
 
     if(hidd_svc_hdl != 0) {
-		esp_ble_gatts_stop_service(hidd_svc_hdl);
-		esp_ble_gatts_delete_service(hidd_svc_hdl);
+        esp_ble_gatts_stop_service(hidd_svc_hdl);
+        esp_ble_gatts_delete_service(hidd_svc_hdl);
     } else {
-		return ESP_FAIL;
-	}
+        return ESP_FAIL;
+    }
     
     /* register the HID device profile to the BTA_GATTS module*/
     esp_ble_gatts_app_unregister(hidd_le_env.gatt_if);
@@ -104,7 +104,7 @@ esp_err_t esp_hidd_profile_deinit(void)
 
 uint16_t esp_hidd_get_version(void)
 {
-	return HIDD_VERSION;
+    return HIDD_VERSION;
 }
 
 void esp_hidd_send_consumer_value(uint16_t conn_id, uint8_t key_cmd, bool key_pressed)
@@ -161,7 +161,6 @@ void esp_hidd_send_mouse_value(uint16_t conn_id, uint8_t mouse_button, int8_t mi
     return;
 }
 
-#if CONFIG_MODULE_USEJOYSTICK
 /**
  *
  * @brief           Send a Joystick report, set individual axis
@@ -173,25 +172,25 @@ void esp_hidd_send_mouse_value(uint16_t conn_id, uint8_t mouse_button, int8_t mi
  */
 void esp_hidd_send_joy_value(uint16_t conn_id, int8_t x, int8_t y, int8_t z, int8_t rz, int8_t rx, int8_t ry, uint8_t hat, uint32_t buttons)
 {
-  uint8_t data[HID_JOYSTICK_IN_RPT_LEN] = {0};
+    uint8_t data[HID_JOYSTICK_IN_RPT_LEN] = {0};
   
-  //build axis into array
-  data[0] = x;
-  data[1] = y;
-  data[2] = z;
-  data[3] = rz;
-  data[4] = rx;
-  data[5] = ry;
+    //build axis into array
+    data[0] = x;
+    data[1] = y;
+    data[2] = z;
+    data[3] = rz;
+    data[4] = rx;
+    data[5] = ry;
   
-  //add hat & buttons
-  data[6] = hat;
-  data[7] = (uint8_t)(buttons & 0xFF);
-  data[8] = (uint8_t)((buttons>>8) & 0xFF);
-  data[9] = (uint8_t)((buttons>>16) & 0xFF);
-  data[10] = (uint8_t)((buttons>>24) & 0xFF);
+    //add hat & buttons
+    data[6] = hat;
+    data[7] = (uint8_t)(buttons & 0xFF);
+    data[8] = (uint8_t)((buttons>>8) & 0xFF);
+    data[9] = (uint8_t)((buttons>>16) & 0xFF);
+    data[10] = (uint8_t)((buttons>>24) & 0xFF);
   
-  //use other joystick function to send data
-  esp_hidd_send_joy_report(conn_id, data);
+    //use other joystick function to send data
+    esp_hidd_send_joy_report(conn_id, data);
 }
 
 /**
@@ -204,8 +203,7 @@ void esp_hidd_send_joy_value(uint16_t conn_id, int8_t x, int8_t y, int8_t z, int
  */
 void esp_hidd_send_joy_report(uint16_t conn_id, uint8_t *report)
 {
-  hid_dev_send_report(hidd_le_env.gatt_if, conn_id,
-    HID_RPT_ID_JOY_IN, HID_REPORT_TYPE_INPUT, HID_JOYSTICK_IN_RPT_LEN, report);
+    hid_dev_send_report(hidd_le_env.gatt_if, conn_id,
+                        HID_RPT_ID_JOY_IN, HID_REPORT_TYPE_INPUT, HID_JOYSTICK_IN_RPT_LEN, report);
 }
 
-#endif
