@@ -32,11 +32,13 @@
 #include "tinyusb_console.h"
 #include "sdkconfig.h"
 
+#define DEVICE_NAME "HID Serial Bridge"
+
 #define HID_TAG "HID"
 #define USB_TAG "USB"
 #define CTRL_TAG "CTRL"
 
-#define BRIDGE_TASK_PRIO 1
+#define BRIDGE_TASK_PRIO 0
 
 #define CDC_FLUSH_TICKS pdMS_TO_TICKS(10)
 
@@ -88,6 +90,41 @@ static void cdc_write_newline()
 }
 
 
+static char cdc_get_char()
+{
+    while(1)
+    {
+        // read & process a single byte
+        char c;
+        size_t read_len;
+        tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*) &c, 1, &read_len);
+        if( read_len > 0 ) {
+            return c;
+        }
+        vTaskDelay(1);
+    }
+}
+
+static void cdc_read_string(char *buf, size_t expected_chars, uint64_t timeout, size_t *received_chars)
+{
+    uint64_t end_time = esp_timer_get_time() + timeout;
+    size_t received = 0;
+    while( received < expected_chars && esp_timer_get_time() < end_time ) {
+        char c;
+        size_t read_len;
+        tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*) &c, 1, &read_len);
+        if( read_len > 0 ) {
+            buf[received] = c;
+            received++;
+        }
+        else {
+            vTaskDelay(1);
+        }
+    }
+    *received_chars = received;
+}
+
+
 /* NVS handle to resolve BT addr to name. In NVS, we store the BT addr as key and the name as value. */
 nvs_handle nvs_bt_name_h;
 
@@ -136,7 +173,7 @@ static esp_ble_adv_data_t hidd_adv_data = {
     .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
     /* HID generic appearance does not work on some iOS/Amazon FireTV Sticks, see
        https://github.com/asterics/esp32_mouse_keyboard/issues/52 */
-    .appearance = 0x03c2,       //HID Mouse (keyboard: 0x03c1)
+    .appearance = 0x03c1,       //HID keyboard
     .manufacturer_len = 0,
     .p_manufacturer_data =  NULL,
     .service_data_len = 0,
@@ -153,7 +190,7 @@ static esp_ble_adv_params_t hidd_adv_params = {
     .adv_type           = ADV_TYPE_IND,
     .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
     .channel_map        = ADV_CHNL_ALL,
-    .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_WLST,
+    .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
 };
 
 uint8_t uppercase(uint8_t c)
@@ -195,7 +232,7 @@ int hex_str_to_bytes(const char *input, size_t input_len,
   if (input_len % 2 != 0) {
     return -1;
   }
-  
+
   size_t out_idx = 0;
   for (size_t in_idx = 0; in_idx < input_len; in_idx++) {
       char c = input[in_idx];
@@ -239,7 +276,6 @@ static void periodicHIDCallback(void* arg)
         }
         //save timestamp for next call
         timestampLastSent = esp_timer_get_time();
-        ESP_LOGD(HID_TAG,"Idle...");
     }
 }
 
@@ -276,6 +312,7 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
     switch(event) {
     case ESP_HIDD_EVENT_REG_FINISH: {
         if (param->init_finish.state == ESP_HIDD_INIT_OK) {
+            esp_ble_gap_set_device_name(DEVICE_NAME);
             esp_ble_gap_config_adv_data(&hidd_adv_data);
         }
         break;
@@ -377,7 +414,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         ESP_LOGI(HID_TAG, "pair status = %s",param->ble_security.auth_cmpl.success ? "success" : "fail");
         if(!param->ble_security.auth_cmpl.success) {
             ESP_LOGW(HID_TAG, "fail reason = 0x%x",param->ble_security.auth_cmpl.fail_reason);
-        } 
+        }
         if(esp_ble_gap_update_whitelist(true,bd_addr,BLE_WL_ADDR_TYPE_PUBLIC) != ESP_OK)
         {
             ESP_LOGW(HID_TAG,"cannot add device to whitelist, with public address");
@@ -433,7 +470,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
         }
     }
     break;
-    
+
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
         //scan start complete event to indicate scan start successfully or failed
         if (param->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
@@ -472,6 +509,7 @@ void cdc_bridge_task(void *pvParameters)
         size_t read_len;
         tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*) &character, 1, &read_len);
         if( read_len > 0 ) {
+            ESP_LOGI(HID_TAG, "Got: %c", character);
             // parse the command
         }
         vTaskDelay(1);
@@ -560,7 +598,7 @@ void app_main(void)
     esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
 
     //start the bridge job
-    // xTaskCreate(&cdc_bridge_task, "bridge", 4096, NULL, BRIDGE_TASK_PRIO, NULL);
+    xTaskCreate(&cdc_bridge_task, "bridge", 4096, NULL, BRIDGE_TASK_PRIO, NULL);
 
     //start periodic timer to send HID reports
     const esp_timer_create_args_t periodic_timer_args = {
