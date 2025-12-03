@@ -26,7 +26,7 @@
 #include "tinyusb_console.h"
 #include "sdkconfig.h"
 
-#define DEVICE_NAME "HID Serial Bridge"
+#define HIDD_DEVICE_NAME "HID Serial Bridge"
 
 #define BLE_TAG "BLE"
 #define USB_TAG "USB"
@@ -167,6 +167,10 @@ static int cdc_read_hex_bytes(uint8_t *buf, size_t expected_bytes, uint64_t time
 
 
 
+static uint16_t hid_conn_id = 0;
+static bool sec_conn = false;
+
+
 static uint8_t hidd_service_uuid128[] = {
     /* LSB <--------------------------------------------------------------------------------> MSB */
     //first uuid, 16bit, [12],[13] is the value
@@ -203,15 +207,78 @@ static esp_ble_adv_params_t hidd_adv_params = {
 };
 
 
+static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param)
+{
+    switch(event) {
+        case ESP_HIDD_EVENT_REG_FINISH: {
+            if (param->init_finish.state == ESP_HIDD_INIT_OK) {
+                //esp_bd_addr_t rand_addr = {0x04,0x11,0x11,0x11,0x11,0x05};
+                esp_ble_gap_set_device_name(HIDD_DEVICE_NAME);
+                esp_ble_gap_config_adv_data(&hidd_adv_data);
+            }
+            break;
+        }
+        case ESP_BAT_EVENT_REG: {
+            break;
+        }
+        case ESP_HIDD_EVENT_DEINIT_FINISH:
+	     break;
+		case ESP_HIDD_EVENT_BLE_CONNECT: {
+            ESP_LOGI(BLE_TAG, "ESP_HIDD_EVENT_BLE_CONNECT");
+            hid_conn_id = param->connect.conn_id;
+            break;
+        }
+        case ESP_HIDD_EVENT_BLE_DISCONNECT: {
+            sec_conn = false;
+            ESP_LOGI(BLE_TAG, "ESP_HIDD_EVENT_BLE_DISCONNECT");
+            esp_ble_gap_start_advertising(&hidd_adv_params);
+            break;
+        }
+        default:
+            break;
+    }
+    return;
+}
+
+
+static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
+{
+    switch (event) {
+    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
+        esp_ble_gap_start_advertising(&hidd_adv_params);
+        break;
+     case ESP_GAP_BLE_SEC_REQ_EVT:
+        for(int i = 0; i < ESP_BD_ADDR_LEN; i++) {
+             ESP_LOGD(BLE_TAG, "%x:",param->ble_security.ble_req.bd_addr[i]);
+        }
+        esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
+	 break;
+     case ESP_GAP_BLE_AUTH_CMPL_EVT:
+        esp_bd_addr_t bd_addr;
+        memcpy(bd_addr, param->ble_security.auth_cmpl.bd_addr, sizeof(esp_bd_addr_t));
+        ESP_LOGI(BLE_TAG, "remote BD_ADDR: %08x%04x",\
+                (bd_addr[0] << 24) + (bd_addr[1] << 16) + (bd_addr[2] << 8) + bd_addr[3],
+                (bd_addr[4] << 8) + bd_addr[5]);
+        ESP_LOGI(BLE_TAG, "address type = %d", param->ble_security.auth_cmpl.addr_type);
+        ESP_LOGI(BLE_TAG, "pair status = %s",param->ble_security.auth_cmpl.success ? "success" : "fail");
+        if (param->ble_security.auth_cmpl.success) {
+            sec_conn = true;
+            ESP_LOGI(BLE_TAG, "secure connection established.");
+        } else {
+            ESP_LOGE(BLE_TAG, "pairing failed, reason = 0x%x",
+                     param->ble_security.auth_cmpl.fail_reason);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
     
 
 
 /*
   Commands: (xx is a two-character hex number)
-  Pxx   -- start pairing and accepting a new connection for connection slot xx
-  L     -- list active connections
-  Cxx   -- switch to active connection number xx
-  N     -- switch to the next connection slot
   Z     -- erase all pairings
   Kxxxx -- send a keyboard report
   Mxxxx -- send a mouse report
@@ -225,28 +292,28 @@ void cdc_bridge_task(void *pvParameters)
     {
         char c = cdc_get_char();
         switch (c) {
-        case 'A':
+        case 'Z':
         {
-            int8_t slot_n;
-            size_t received_bytes;
-            if( cdc_read_hex_bytes(&slot_n, 1, CTRL_COMMAND_TIMEOUT, &received_bytes) == 0 &&
-                received_bytes == 1 ) {
-                if( slot_n < CONFIG_BT_ACL_CONNECTIONS ) {
-                    hidd_adv_params.adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY;
-                    esp_ble_gap_start_advertising(&hidd_adv_params);
-                    current_hid_conn_id = slot_n;
-                    ESP_LOGI(BLE_TAG, "Started advertising for slot %x", current_hid_conn_id);
-                    esp_timer_start_once(adv_timer, BLE_ADV_TIMEOUT);
-                }
-                else {
-                    ESP_LOGE(CTRL_TAG, "Slot number too big, cannot be %d or higher", CONFIG_BT_ACL_CONNECTIONS);
-                }
+            int dev_num = esp_ble_get_bond_device_num();
+            if (dev_num == 0) {
+                ESP_LOGI(BLE_TAG, "No bonded devices\n");
             }
             else {
-                ESP_LOGE(CTRL_TAG, "Error in input, expected Axx");
+                esp_ble_bond_dev_t *dev_list = (esp_ble_bond_dev_t *)malloc(sizeof(esp_ble_bond_dev_t) * dev_num);
+                if (!dev_list) {
+                    ESP_LOGE(BLE_TAG, "malloc failed\n");
+                }
+                else {
+                    esp_ble_get_bond_device_list(&dev_num, dev_list);
+                    for (int i = 0; i < dev_num; i++) {
+                        esp_ble_remove_bond_device(dev_list[i].bd_addr);
+                    }
+                    free(dev_list);
+                }
             }
         }
         break;
+        }
     }
 }
 
@@ -300,6 +367,26 @@ void app_main(void)
     }
 
 
+    ///register the callback function to the gap module
+    esp_ble_gap_register_callback(gap_event_handler);
+    esp_hidd_register_callbacks(hidd_event_callback, 1);
+
+    /* set the security iocap & auth_req & key size & init key response key parameters to the stack*/
+    esp_ble_auth_req_t auth_req = ESP_LE_AUTH_BOND;     //bonding with peer device after authentication
+    esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;           //set the IO capability to No output No input
+    uint8_t key_size = 16;      //the key size should be 7~16 bytes
+    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(uint8_t));
+    /* If your BLE device act as a Slave, the init_key means you hope which types of key of the master should distribute to you,
+    and the response key means which key you can distribute to the Master;
+    If your BLE device act as a master, the response key means you hope which types of key of the slave should distribute to you,
+    and the init key means which key you can distribute to the slave. */
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
+    
     //start the bridge job
     xTaskCreate(&cdc_bridge_task, "bridge", 4096, NULL, BRIDGE_TASK_PRIO, NULL);
 }
