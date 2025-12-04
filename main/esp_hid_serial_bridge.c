@@ -371,15 +371,15 @@ void cdc_bridge_task(void *pvParameters)
         break;
         case 'M':
         {
-            uint8_t data[3];
+            uint8_t data[5];
             size_t received_bytes;
             uint8_t ok = 1;
-            if( cdc_read_hex_bytes(data, 3, CTRL_COMMAND_TIMEOUT, &received_bytes) != 0 || received_bytes != 3 ) {
+            if( cdc_read_hex_bytes(data, 5, CTRL_COMMAND_TIMEOUT, &received_bytes) != 0 || received_bytes != 5 ) {
                 ok = 0;
             }
             if( ok ) {
                 if( sec_conn ) {
-                    esp_hidd_send_mouse_value(hid_conn_id, data[0], data[1], data[2]);
+                    esp_hidd_send_mouse_value(hid_conn_id, data[0], data[1], data[2], data[3], data[4]);
                 }
                 else {
                     cdc_write_string_nl("ERR:NOTCONNECTED");
