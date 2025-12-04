@@ -291,9 +291,8 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
   Commands: (xx is a two-character hex number)
   S     -- retrieve current BLE connection status
   Z     -- erase all pairings
-  Kxxxx -- send a keyboard report: [modifier][numkeys][key1]...[key6]
-  Mxxxx -- send a mouse report
-  Jxxxx -- send a joystick report
+  Kxxxxxx -- send a keyboard report: [modifier][numkeys][key1]...[key6]
+  Mxxxxxx -- send a mouse report: [buttons][xmov][ymov]
 */
 
 void cdc_bridge_task(void *pvParameters)
@@ -360,6 +359,27 @@ void cdc_bridge_task(void *pvParameters)
             if( ok ) {
                 if( sec_conn ) {
                     esp_hidd_send_keyboard_value(hid_conn_id, special_key_mask, keys, num_keys);
+                }
+                else {
+                    cdc_write_string_nl("ERR:NOTCONNECTED");
+                }
+            }
+            else {
+                cdc_write_string_nl("ERR:SYNTAX");
+            }
+        }
+        break;
+        case 'M':
+        {
+            uint8_t data[3];
+            size_t received_bytes;
+            uint8_t ok = 1;
+            if( cdc_read_hex_bytes(data, 3, CTRL_COMMAND_TIMEOUT, &received_bytes) != 0 || received_bytes != 3 ) {
+                ok = 0;
+            }
+            if( ok ) {
+                if( sec_conn ) {
+                    esp_hidd_send_mouse_value(hid_conn_id, data[0], data[1], data[2]);
                 }
                 else {
                     cdc_write_string_nl("ERR:NOTCONNECTED");
