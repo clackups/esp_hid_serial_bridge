@@ -293,6 +293,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
   Z     -- erase all pairings
   Kxxxxxx -- send a keyboard report: [modifier][numkeys][key1]...[key6]
   Mxxxxxx -- send a mouse report: [buttons][xmov][ymov]
+  Jxxxxxxxxxxxxxxxxxxxxxx -- send a joystick report (11 bytes)
 */
 
 void cdc_bridge_task(void *pvParameters)
@@ -380,6 +381,29 @@ void cdc_bridge_task(void *pvParameters)
             if( ok ) {
                 if( sec_conn ) {
                     esp_hidd_send_mouse_value(hid_conn_id, data[0], data[1], data[2], data[3], data[4]);
+                }
+                else {
+                    cdc_write_string_nl("ERR:NOTCONNECTED");
+                }
+            }
+            else {
+                cdc_write_string_nl("ERR:SYNTAX");
+            }
+        }
+        case 'J':
+        {
+            uint8_t data[11];
+            size_t received_bytes;
+            uint8_t ok = 1;
+            if( cdc_read_hex_bytes(data, 1, CTRL_COMMAND_TIMEOUT, &received_bytes) != 0 || received_bytes != 11 ) {
+                ok = 0;
+            }
+            if( ok ) {
+                if( sec_conn ) {
+                    uint32_t buttons = (uint32_t)data[7] + ((uint32_t)data[8] << 8) +
+                        ((uint32_t)data[9] << 16) + ((uint32_t)data[10] << 24);
+                    esp_hidd_send_joy_value(hid_conn_id, data[0], data[1], data[2],
+                                            data[3], data[4], data[5], data[6], buttons);
                 }
                 else {
                     cdc_write_string_nl("ERR:NOTCONNECTED");
