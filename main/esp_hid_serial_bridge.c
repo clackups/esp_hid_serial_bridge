@@ -292,7 +292,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
   S     -- retrieve current BLE connection status
   Z     -- erase all pairings
   Kxxxxxx -- send a keyboard report: [modifier][numkeys][key1]...[key6]
-  Mxxxxxx -- send a mouse report: [buttons][xmov][ymov]
+  Mxxxxxxxxxx -- send a mouse report: [buttons][xmov][ymov][wheel][pan]
 */
 
 void cdc_bridge_task(void *pvParameters)
