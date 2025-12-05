@@ -94,32 +94,16 @@ static void cdc_write_string_nl(const char* data)
     cdc_write_newline();
 }
 
-static char cdc_get_char()
-{
-    while(1)
-    {
-        // read & process a single byte
-        char c;
-        size_t read_len;
-        tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*) &c, 1, &read_len);
-        if( read_len > 0 ) {
-            return c;
-        }
-        taskYIELD();
-    }
-}
 
 static void cdc_read_string(char *buf, size_t expected_chars, uint64_t timeout, size_t *received_chars)
 {
     uint64_t end_time = esp_timer_get_time() + timeout;
     size_t received = 0;
     while( received < expected_chars && esp_timer_get_time() < end_time ) {
-        char c;
         size_t read_len;
-        tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*) &c, 1, &read_len);
+        tinyusb_cdcacm_read(TINYUSB_CDC_ACM_0, (uint8_t*)buf + received, expected_chars - received, &read_len);
         if( read_len > 0 ) {
-            buf[received] = c;
-            received++;
+            received += read_len;
         }
         else {
             taskYIELD();
@@ -128,6 +112,20 @@ static void cdc_read_string(char *buf, size_t expected_chars, uint64_t timeout, 
     *received_chars = received;
 }
 
+
+static char cdc_get_char()
+{
+    while(1)
+    {
+        // read & process a single byte
+        char c;
+        size_t read_len;
+        cdc_read_string(&c, 1, CTRL_COMMAND_TIMEOUT, &read_len);
+        if( read_len > 0 ) {
+            return c;
+        }
+    }
+}
 
 int hex_str_to_bytes(const char *input, size_t input_len,
                      uint8_t *output, size_t *output_len) {
