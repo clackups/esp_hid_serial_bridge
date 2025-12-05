@@ -34,6 +34,7 @@
 
 #define BRIDGE_TASK_PRIO 1
 #define CTRL_COMMAND_TIMEOUT 500000
+#define BLE_SEND_PAUSE (10 / portTICK_PERIOD_MS)
 
 #define CDC_FLUSH_TICKS pdMS_TO_TICKS(10)
 
@@ -357,6 +358,7 @@ void cdc_bridge_task(void *pvParameters)
             if( ok ) {
                 if( sec_conn ) {
                     esp_hidd_send_keyboard_value(hid_conn_id, special_key_mask, keys, num_keys);
+                    vTaskDelay(BLE_SEND_PAUSE);
                 }
                 else {
                     cdc_write_string_nl("ERR:NOTCONNECTED");
@@ -378,6 +380,7 @@ void cdc_bridge_task(void *pvParameters)
             if( ok ) {
                 if( sec_conn ) {
                     esp_hidd_send_mouse_value(hid_conn_id, data[0], data[1], data[2], data[3], data[4]);
+                    vTaskDelay(BLE_SEND_PAUSE);
                 }
                 else {
                     cdc_write_string_nl("ERR:NOTCONNECTED");
