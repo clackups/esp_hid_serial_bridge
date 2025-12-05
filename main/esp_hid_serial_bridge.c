@@ -105,7 +105,7 @@ static char cdc_get_char()
         if( read_len > 0 ) {
             return c;
         }
-        vTaskDelay(1);
+        taskYIELD();
     }
 }
 
@@ -122,7 +122,7 @@ static void cdc_read_string(char *buf, size_t expected_chars, uint64_t timeout, 
             received++;
         }
         else {
-            vTaskDelay(1);
+            taskYIELD();
         }
     }
     *received_chars = received;
@@ -467,5 +467,5 @@ void app_main(void)
     ESP_ERROR_CHECK( ret );
 
     //start the bridge job
-    xTaskCreate(&cdc_bridge_task, "bridge", 4096, NULL, BRIDGE_TASK_PRIO, NULL);
+    xTaskCreatePinnedToCore(&cdc_bridge_task, "bridge", 4096, NULL, BRIDGE_TASK_PRIO, NULL, 1);
 }
