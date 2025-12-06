@@ -97,9 +97,9 @@ congestion.
 To Do
 -----
 
-* find a catchy name for the project.
+* Find a catchy name for the project.
 
-* Register a unique USBq VID/PID at https://github.com/pidcodes
+* Register a unique USB VID/PID at https://github.com/pidcodes
 
 * Learn how HID profiles work and add the horizontal wheel (AC Pan)
   and joystick support.
@@ -107,7 +107,8 @@ To Do
 * Find better way for congestion avoidance (currently done with
   `vTaskDelay(BLE_SEND_PAUSE)` after each BLE message).
 
-* Use the BT MAC address in USB device Serial string.
+* Use the Bluetooth MAC address in USB device Serial string (currently
+  defined statically in `sdkconfig.defaults`).
 
 
 
