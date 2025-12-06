@@ -9,7 +9,7 @@ appliance that will help compensating various disabilities for users
 who can't use the standard keyboard or mouse. A dedicated small
 computer, such as a Raspberry Pi, could be programmed to take the user
 input, transform it with the means of language dictionaries, LLM or
-some other tools, and generate the HID input for the user's desktop.
+speech recognition, and generate the HID input for the user's desktop.
 
 Hardware requirements
 ---------------------
@@ -30,7 +30,7 @@ instructions. The default sesttoingss would be suitable for work.
 Control interface
 -----------------
 
-On a Linux host, the device would be visible as /dev/ttyACM0 (or a
+On a Linux host, the device would be visible as `/dev/ttyACM0` (or a
 different number if other ACM USB Serial adapters are
 present). Picocom can be utilized for quick tests.
 
@@ -92,6 +92,23 @@ K000128K0000
 While sending the keyboard commands, you need to make sure not to send
 them too fast, otherwise some input could be lost because of Bluetooth
 congestion.
+
+
+To Do
+-----
+
+* find a catchy name for the project.
+
+* Register a unique USBq VID/PID at https://github.com/pidcodes
+
+* Learn how HID profiles work and add the horizontal wheel (AC Pan)
+  and joystick support.
+
+* Find better way for congestion avoidance (currently done with
+  `vTaskDelay(BLE_SEND_PAUSE)` after each BLE message).
+
+* Use the BT MAC address in USB device Serial string.
+
 
 
 ## Copyright and license
