@@ -1,7 +1,7 @@
 ESP32-S3 BLE-HID serial bridge
 ==============================
 
-This is a firmare project for ESP32-S3 that implements a BLE keyboard
+This is a firmare project for ESP32-S3, implementing a BLE keyboard
 and mouse device that takes its inpiut from a USB-Serial interface.
 
 The purpose of this device is to allow building a smart input
@@ -25,14 +25,14 @@ Building the firmware
 ---------------------
 
 Set up the ESP-IDF version 5.5.1 and follow the standard
-instructions. The default sesttoingss would be suitable for work.
+instructions. The default settings would be suitable for work.
 
 Control interface
 -----------------
 
 On a Linux host, the device would be visible as `/dev/ttyACM0` (or a
 different number if other ACM USB Serial adapters are
-present). Picocom can be utilized for quick tests.
+present). `picocom` can be utilized for testing.
 
 The device automatically accepts secure BLE 4.1 pairing requests. It
 allows only one active connection at a time, but multiple hosts can be
@@ -53,7 +53,7 @@ Commands:
   (`\r\n`).
 
 * `Z`: delete all Bluetooth pairings. Keep in mind that some OSes may
-  keep retrying and failoing to connect in a loop after this
+  keep retrying and failing to connect in a loop after this
   operation, until you "forget" the device in the host OS.
 
 * `Kxxxxxx`: send a Keryboard HID report. The first byte indicates the
@@ -104,7 +104,7 @@ To Do
 * Learn how HID profiles work and add the horizontal wheel (AC Pan)
   and joystick support.
 
-* Find better way for congestion avoidance (currently done with
+* Find a better way for congestion avoidance (currently done with
   `vTaskDelay(BLE_SEND_PAUSE)` after each BLE message).
 
 * Use the Bluetooth MAC address in USB device Serial string (currently
