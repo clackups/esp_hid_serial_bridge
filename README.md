@@ -107,9 +107,6 @@ To Do
 * Find a better way for congestion avoidance (currently done with
   `vTaskDelay(BLE_SEND_PAUSE)` after each BLE message).
 
-* Use the Bluetooth MAC address in USB device Serial string (currently
-  defined statically in `sdkconfig.defaults`).
-
 
 
 ## Copyright and license

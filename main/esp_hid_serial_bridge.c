@@ -20,6 +20,8 @@
 #include "esp_bt_device.h"
 #include "hid_dev.h"
 
+#include "esp_efuse.h"
+
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 #include "tinyusb_cdc_acm.h"
@@ -37,6 +39,17 @@
 #define BLE_SEND_PAUSE (10 / portTICK_PERIOD_MS)
 
 #define CDC_FLUSH_TICKS pdMS_TO_TICKS(10)
+
+// USB serial string derived from ESP32-S3 MAC address (12 hex chars + null terminator)
+static char usb_serial_string[13];
+
+static const char *usb_string_desc[] = {
+    (const char[]){0x09, 0x04},              // 0: Language ID 0x0409 (English - United States)
+    CONFIG_TINYUSB_DESC_MANUFACTURER_STRING, // 1: Manufacturer
+    CONFIG_TINYUSB_DESC_PRODUCT_STRING,      // 2: Product
+    usb_serial_string,                       // 3: Serial (derived from MAC address)
+    CONFIG_TINYUSB_DESC_CDC_STRING,          // 4: CDC Interface
+};
 
 static void start_ble();
 
@@ -60,7 +73,15 @@ static void init_usb_cdc(void)
 {
     ESP_LOGI(USB_TAG, "USB initialization");
 
-    const tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG(usb_device_event_handler);
+    // Derive USB serial string from ESP32-S3 MAC address
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    snprintf(usb_serial_string, sizeof(usb_serial_string), "%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG(usb_device_event_handler);
+    tusb_cfg.descriptor.string = usb_string_desc;
+    tusb_cfg.descriptor.string_count = sizeof(usb_string_desc) / sizeof(usb_string_desc[0]);
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
 
     const tinyusb_config_cdcacm_t acm_cfg = {
