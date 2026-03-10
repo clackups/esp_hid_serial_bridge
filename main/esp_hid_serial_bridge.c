@@ -21,6 +21,7 @@
 #include "hid_dev.h"
 
 #include "esp_efuse.h"
+#include "esp_mac.h"
 
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
