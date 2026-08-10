@@ -17,8 +17,8 @@ Hardware requirements
 Any ESP32-S3 chip with USB interface and Bluetooth antenna would be
 suitable.
 
-For example, a LILYGO T-Dongle S3 would make a compact and convenient
-device (the screen would not be utilized in this case).
+For example, a [LILYGO T-Dongle S3](https://lilygo.cc/products/t-dongle-s3) 
+would make a compact and convenient device (the screen would not be utilized in this case).
 
 
 Building the firmware
